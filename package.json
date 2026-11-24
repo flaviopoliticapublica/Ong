@@ -1,0 +1,8 @@
+{
+  "name": "conecta-ods",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Conecta ONGs e projetos pelos ODS, com API e login",
+  "engines": { "node": ">=22.5" },
+  "scripts": { "start": "node --no-warnings server.js", "test": "node --no-warnings test.js" }
+}

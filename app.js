@@ -12,8 +12,28 @@ const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem("cods_" + k)) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem("cods_" + k, JSON.stringify(v)); } catch {} },
 };
-const ALL_ONGS = () => [...ONGS, ...store.get("ongs", [])];
-const ALL_PROJ = () => [...PROJETOS, ...store.get("projetos", [])];
+// dados vêm da API (servidor); ME = usuário logado
+let DB = { ongs: [], projetos: [] }, ME = null;
+const ALL_ONGS = () => DB.ongs;
+const ALL_PROJ = () => DB.projetos;
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : { "Content-Type": "application/json" }, body: method === "GET" ? undefined : JSON.stringify(body || {}), credentials: "same-origin" });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.erro || "Erro " + r.status);
+  return j;
+}
+async function recarregar() { DB = await api("GET", "/api/dados"); }
+function navUser() {
+  const n = $("#nav");
+  n.querySelectorAll(".dyn").forEach((e) => e.remove());
+  const add = (h, r, t) => n.insertAdjacentHTML("beforeend", `<a class="dyn" href="${h}" data-r="${r}">${t}</a>`);
+  if (!ME) add("#conta", "conta", "Entrar / Criar conta");
+  else {
+    if (ME.tipo === "ong") add("#meus", "meus", "Meus projetos");
+    n.insertAdjacentHTML("beforeend", `<a class="dyn" href="#" id="sair">Sair (${esc(ME.nome.split(" ")[0])})</a>`);
+    $("#sair").onclick = async (e) => { e.preventDefault(); await api("POST", "/api/logout"); ME = null; navUser(); location.hash = "#explorar"; go(); };
+  }
+}
 
 const odsBadge = (n, sm) => { const o = odsOf(n); return `<span class="ods ${sm ? "sm" : ""}" style="background:${o.cor}" title="ODS ${n} — ${esc(o.nome)}">${n}</span>`; };
 const odsRow = (list) => `<div class="odsrow">${list.map((n) => odsBadge(n, true)).join("")}</div>`;
@@ -69,12 +89,12 @@ function parceiros(p, n = 4) {
 let filtro = { q: "", eixo: "", ods: "", uf: "", status: "", nec: "" };
 let perfil = store.get("perfil", { ods: [], eixos: [], oferece: [], uf: "" });
 
-const rotas = { explorar: vExplorar, conexoes: vConexoes, painel: vPainel, cadastrar: vCadastrar };
+const rotas = { explorar: vExplorar, conexoes: vConexoes, painel: vPainel, conta: vConta, meus: vMeus, cadastrar: vCadastrar };
 function go() {
   const r = (location.hash.replace("#", "").split("?")[0]) || "explorar";
   const f = rotas[r] || vExplorar;
   document.querySelectorAll("#nav a").forEach((a) => a.classList.toggle("on", a.dataset.r === r));
-  f($("#app"));
+  Promise.resolve(f($("#app"))).catch((e) => { $("#app").innerHTML = `<p role="alert">Erro: ${esc(e.message)}</p>`; });
 }
 addEventListener("hashchange", go);
 
@@ -132,18 +152,17 @@ function ajudar(id) {
   if (!p) return;
   abrir(`<header><h2 id="mtitle" style="margin:0">Apoiar: ${esc(p.nome)}</h2><button class="sec" data-close aria-label="Fechar">✕</button></header>
   <form id="fa" style="display:grid;gap:10px;margin-top:10px">
-    <div><label for="a1">Seu nome ou organização</label><input id="a1" required maxlength="100"></div>
-    <div><label for="a2">E-mail ou telefone</label><input id="a2" required maxlength="100"></div>
+    <div><label for="a1">Seu nome ou organização</label><input id="a1" required maxlength="100" value="${esc(ME?.nome || "")}"></div>
+    <div><label for="a2">E-mail ou telefone</label><input id="a2" required maxlength="100" value="${esc(ME?.email || "")}"></div>
     <div><label for="a3">Como quer contribuir?</label><select id="a3">${NECESSIDADES.map((n) => `<option value="${esc(n.id)}" ${p.necessidades.includes(n.id) ? "" : ""}>${esc(n.nome)}</option>`).join("")}<option value="outro">Outro</option></select></div>
     <div><label for="a4">Mensagem</label><textarea id="a4" maxlength="500"></textarea></div>
     <button>Enviar interesse</button>
-    <p class="meta">Demonstração: o interesse é salvo apenas neste navegador; nenhum dado é enviado a terceiros.</p>
+    <p class="meta">Seus dados de contato serão vistos apenas pela ONG responsável pelo projeto.</p><p id="aerr" class="meta" role="alert" style="color:var(--warn)"></p>
   </form>`);
-  $("#fa").onsubmit = (e) => {
+  $("#fa").onsubmit = async (e) => {
     e.preventDefault();
-    const lista = store.get("interesses", []);
-    lista.push({ projeto: id, nome: $("#a1").value, contato: $("#a2").value, tipo: $("#a3").value, msg: $("#a4").value, quando: new Date().toISOString() });
-    store.set("interesses", lista);
+    try { await api("POST", "/api/interesses", { projeto: id, nome: $("#a1").value, contato: $("#a2").value, tipo: $("#a3").value, msg: $("#a4").value }); }
+    catch (er) { $("#aerr").textContent = er.message; return; }
     $(".sheet").innerHTML = `<h2 id="mtitle">Obrigado! 💚</h2><p class="ok">Seu interesse em “${esc(p.nome)}” foi registrado.</p><button data-close>Fechar</button>`;
   };
 }
@@ -241,48 +260,100 @@ function vPainel(root) {
   }));
 }
 
-// ---------- Cadastrar ----------
+// ---------- Conta (login / cadastro) ----------
+function vConta(root) {
+  if (ME) { location.hash = ME.tipo === "ong" ? "#meus" : "#explorar"; return; }
+  root.innerHTML = `<h1>Entrar ou criar conta</h1>
+  <p class="lead">ONGs publicam e gerenciam seus projetos e recebem interessados. Apoiadores e voluntários têm conta para agilizar o contato.</p>
+  <div class="row">
+    <form class="panel" id="fl" style="display:grid;gap:10px;align-content:start"><h2 style="margin:0">Entrar</h2>
+      <div><label for="l1">E-mail</label><input id="l1" type="email" required autocomplete="username"></div>
+      <div><label for="l2">Senha</label><input id="l2" type="password" required autocomplete="current-password"></div>
+      <p id="lerr" class="meta" role="alert" style="color:var(--warn)"></p><button>Entrar</button></form>
+    <form class="panel" id="fr" style="display:grid;gap:10px;align-content:start"><h2 style="margin:0">Criar conta</h2>
+      <div><label for="r0">Tipo de conta</label><select id="r0"><option value="ong">Sou uma ONG</option><option value="apoiador">Sou voluntário / apoiador</option></select></div>
+      <div><label for="r1">Seu nome</label><input id="r1" required maxlength="100" autocomplete="name"></div>
+      <div><label for="r2">E-mail</label><input id="r2" type="email" required autocomplete="username"></div>
+      <div><label for="r3">Senha (mín. 8 caracteres)</label><input id="r3" type="password" required minlength="8" autocomplete="new-password"></div>
+      <div class="ongf"><label for="r4">Nome da ONG</label><input id="r4" maxlength="100"></div>
+      <div class="ongf"><label for="r5">Cidade</label><input id="r5" maxlength="60"></div>
+      <div class="ongf"><label for="r6">UF</label><input id="r6" maxlength="2" style="text-transform:uppercase"></div>
+      <p id="rerr" class="meta" role="alert" style="color:var(--warn)"></p><button>Criar conta</button></form>
+  </div>`;
+  const toggle = () => root.querySelectorAll(".ongf").forEach((d) => { d.hidden = $("#r0").value !== "ong"; d.querySelector("input").required = !d.hidden; });
+  $("#r0").onchange = toggle; toggle();
+  const entrou = (j) => { ME = j.user; navUser(); location.hash = ME.tipo === "ong" ? "#meus" : "#explorar"; go(); };
+  $("#fl").onsubmit = async (e) => { e.preventDefault(); try { entrou(await api("POST", "/api/login", { email: $("#l1").value, senha: $("#l2").value })); } catch (er) { $("#lerr").textContent = er.message; } };
+  $("#fr").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const j = await api("POST", "/api/register", { tipo: $("#r0").value, nome: $("#r1").value, email: $("#r2").value, senha: $("#r3").value, ongNome: $("#r4").value, cidade: $("#r5").value, uf: $("#r6").value });
+      await recarregar(); entrou(j);
+    } catch (er) { $("#rerr").textContent = er.message; }
+  };
+}
+
+// ---------- Meus projetos (área da ONG) ----------
+async function vMeus(root) {
+  if (!ME || ME.tipo !== "ong") { location.hash = "#conta"; return; }
+  const meus = ALL_PROJ().filter((p) => p.ong === ME.ong_id);
+  const ints = await api("GET", "/api/interesses");
+  root.innerHTML = `<h1>Meus projetos</h1>
+  <p class="lead">Gerencie os projetos da sua ONG e acompanhe quem quer ajudar.</p>
+  <p><a class="btn" href="#cadastrar">+ Novo projeto</a></p>
+  <div class="grid">${meus.map((p) => card(p, `<div class="act"><a class="btn sec" href="#cadastrar?${esc(p.id)}">Editar</a><button class="sec" data-del="${esc(p.id)}">Excluir</button></div>`).replace(/<button data-det[^]*?<\/button><button class="sec" data-ajudar[^]*?<\/button>/, "")).join("") || "<p>Você ainda não publicou projetos.</p>"}</div>
+  <h2>Interessados em ajudar (${ints.length})</h2>
+  <div class="panel">${ints.map((i) => `<div class="mini" style="display:block"><strong>${esc(i.nome)}</strong> · ${esc(i.contato)}<div class="meta">${esc(i.projeto)} · ${esc(necOf(i.tipo)?.nome || "Outro")} · ${esc(new Date(i.criado).toLocaleDateString("pt-BR"))}</div>${i.msg ? `<div>${esc(i.msg)}</div>` : ""}</div>`).join("") || "<p class='meta'>Nenhum interesse recebido ainda.</p>"}</div>`;
+  root.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Excluir este projeto?")) return;
+    await api("DELETE", "/api/projetos/" + b.dataset.del); await recarregar(); vMeus(root);
+  }));
+}
+
+// ---------- Cadastrar / editar projeto ----------
 function vCadastrar(root) {
-  root.innerHTML = `<h1>Cadastre seu projeto</h1>
-  <p class="lead">Informe seu projeto e vincule-o aos ODS. Ele passa a aparecer nas buscas e nas conexões. (Demonstração: salvo apenas neste navegador.)</p>
+  if (!ME || ME.tipo !== "ong") { location.hash = "#conta"; return; }
+  const editId = location.hash.split("?")[1];
+  const ed = editId && ALL_PROJ().find((p) => p.id === editId && p.ong === ME.ong_id);
+  const v = (k, d = "") => esc(ed ? ed[k] : d);
+  const ordem = ed ? [...ed.ods] : [];
+  root.innerHTML = `<h1>${ed ? "Editar projeto" : "Novo projeto"}</h1>
+  <p class="lead">Vincule o projeto aos ODS e eixos. Ele passa a aparecer nas buscas e conexões.</p>
   <form class="panel" id="fc" style="display:grid;gap:12px">
     <div class="row">
-      <div><label for="c1">Nome da ONG *</label><input id="c1" required maxlength="100"></div>
-      <div><label for="c2">Nome do projeto *</label><input id="c2" required maxlength="100"></div>
-      <div><label for="c3">Cidade *</label><input id="c3" required maxlength="60"></div>
-      <div><label for="c4">UF *</label><input id="c4" required maxlength="2" pattern="[A-Za-z]{2}" style="text-transform:uppercase"></div>
-      <div><label for="c5">Público atendido</label><input id="c5" maxlength="100"></div>
-      <div><label for="c6">Nº de beneficiários</label><input id="c6" type="number" min="0"></div>
-      <div><label for="c7">Situação</label><select id="c7">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></div>
-      <div><label for="c8">Indicador de resultado</label><input id="c8" maxlength="100"></div>
+      <div><label for="c2">Nome do projeto *</label><input id="c2" required maxlength="100" value="${v("nome")}"></div>
+      <div><label for="c3">Cidade *</label><input id="c3" required maxlength="60" value="${v("cidade")}"></div>
+      <div><label for="c4">UF *</label><input id="c4" required maxlength="2" pattern="[A-Za-z]{2}" style="text-transform:uppercase" value="${v("uf")}"></div>
+      <div><label for="c5">Público atendido</label><input id="c5" maxlength="100" value="${ed && ed.publico !== "—" ? v("publico") : ""}"></div>
+      <div><label for="c6">Nº de beneficiários</label><input id="c6" type="number" min="0" value="${v("beneficiarios")}"></div>
+      <div><label for="c7">Situação</label><select id="c7">${Object.entries(STATUS).map(([k, t]) => `<option value="${k}" ${ed?.status === k ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+      <div><label for="c8">Indicador de resultado</label><input id="c8" maxlength="100" value="${ed && ed.indicador !== "—" ? v("indicador") : ""}"></div>
     </div>
-    <div><label for="c9">Resumo do projeto *</label><textarea id="c9" required maxlength="400"></textarea></div>
-    <fieldset style="border:0;padding:0;margin:0"><legend><label>Eixos temáticos * (escolha ao menos um)</label></legend><div class="odspick">${EIXOS.map((e) => `<label><input type="checkbox" name="e" value="${e.id}">${e.icone} ${esc(e.nome)}</label>`).join("")}</div></fieldset>
-    <fieldset style="border:0;padding:0;margin:0"><legend><label>ODS * (o primeiro marcado será o principal)</label></legend><div class="odspick">${ODS.map((o) => `<label><input type="checkbox" name="o" value="${o.n}">${odsBadge(o.n, true)} ${esc(o.nome)}</label>`).join("")}</div></fieldset>
-    <fieldset style="border:0;padding:0;margin:0"><legend><label>O que o projeto precisa</label></legend><div class="odspick">${NECESSIDADES.map((n) => `<label><input type="checkbox" name="n" value="${n.id}">${esc(n.nome)}</label>`).join("")}</div></fieldset>
+    <div><label for="c9">Resumo do projeto *</label><textarea id="c9" required maxlength="400">${v("resumo")}</textarea></div>
+    <fieldset style="border:0;padding:0;margin:0"><legend><label>Eixos temáticos * (ao menos um)</label></legend><div class="odspick">${EIXOS.map((e) => `<label><input type="checkbox" name="e" value="${e.id}" ${ed?.eixos.includes(e.id) ? "checked" : ""}>${e.icone} ${esc(e.nome)}</label>`).join("")}</div></fieldset>
+    <fieldset style="border:0;padding:0;margin:0"><legend><label>ODS * (o primeiro marcado será o principal)</label></legend><div class="odspick">${ODS.map((o) => `<label><input type="checkbox" name="o" value="${o.n}" ${ordem.includes(o.n) ? "checked" : ""}>${odsBadge(o.n, true)} ${esc(o.nome)}</label>`).join("")}</div></fieldset>
+    <fieldset style="border:0;padding:0;margin:0"><legend><label>O que o projeto precisa</label></legend><div class="odspick">${NECESSIDADES.map((n) => `<label><input type="checkbox" name="n" value="${n.id}" ${ed?.necessidades.includes(n.id) ? "checked" : ""}>${esc(n.nome)}</label>`).join("")}</div></fieldset>
     <p id="cerr" class="meta" role="alert" style="color:var(--warn)"></p>
-    <div><button>Publicar projeto</button></div>
+    <div><button>${ed ? "Salvar alterações" : "Publicar projeto"}</button></div>
   </form>`;
-  // preserva a ordem de marcação dos ODS (o primeiro é o principal)
-  const ordem = [];
   root.querySelectorAll("[name=o]").forEach((i) => i.addEventListener("change", () => {
     const n = +i.value, k = ordem.indexOf(n);
     if (i.checked && k < 0) ordem.push(n); else if (!i.checked && k >= 0) ordem.splice(k, 1);
   }));
-  $("#fc").onsubmit = (e) => {
+  $("#fc").onsubmit = async (e) => {
     e.preventDefault();
     const g = (n) => [...root.querySelectorAll(`[name=${n}]:checked`)].map((i) => i.value);
-    const eixos = g("e");
-    if (!eixos.length || !ordem.length) { $("#cerr").textContent = "Escolha ao menos um eixo e um ODS."; return; }
-    const stamp = Date.now().toString(36);
-    const ongs = store.get("ongs", []), proj = store.get("projetos", []);
-    const ongId = "u" + stamp;
-    ongs.push({ id: ongId, nome: $("#c1").value.trim(), cidade: $("#c3").value.trim(), uf: $("#c4").value.toUpperCase(), sobre: "" });
-    proj.push({ id: "up" + stamp, ong: ongId, nome: $("#c2").value.trim(), eixos, ods: [...ordem], cidade: $("#c3").value.trim(), uf: $("#c4").value.toUpperCase(), publico: $("#c5").value.trim() || "—", beneficiarios: +$("#c6").value || 0, status: $("#c7").value, necessidades: g("n"), resumo: $("#c9").value.trim(), indicador: $("#c8").value.trim() || "—" });
-    store.set("ongs", ongs); store.set("projetos", proj);
-    filtro = { q: $("#c2").value.trim(), eixo: "", ods: "", uf: "", status: "", nec: "" };
-    location.hash = "#explorar";
+    const body = { nome: $("#c2").value, cidade: $("#c3").value, uf: $("#c4").value, publico: $("#c5").value, beneficiarios: $("#c6").value, status: $("#c7").value, indicador: $("#c8").value, resumo: $("#c9").value, eixos: g("e"), ods: [...ordem], necessidades: g("n") };
+    try {
+      await api(ed ? "PUT" : "POST", "/api/projetos" + (ed ? "/" + ed.id : ""), body);
+      await recarregar(); location.hash = "#meus";
+    } catch (er) { $("#cerr").textContent = er.message; }
   };
 }
 
-go();
+// ---------- início ----------
+(async () => {
+  try { [ME] = [(await api("GET", "/api/me")).user]; await recarregar(); }
+  catch { $("#app").innerHTML = `<p role="alert">Não foi possível carregar os dados. Inicie o servidor com <code>npm start</code>.</p>`; return; }
+  navUser(); go();
+})();
