@@ -54,3 +54,5 @@ html:not(.x) button.sec,.btn.sec,button.sec{background:var(--pri2);color:var(--p
 .odspick{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px}
 .odspick label{display:flex;align-items:center;gap:8px;font-weight:500;color:var(--ink);font-size:.88rem;margin:0;cursor:pointer}
 .odspick input{width:auto}
+.split{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:20px;align-items:start}@media(max-width:820px){.split{grid-template-columns:1fr}}
+nav a[href="#cadastrar"]{background:var(--pri);color:#fff}nav a[href="#cadastrar"].on,nav a[href="#cadastrar"]:hover{background:var(--pri);color:#fff;opacity:.9}

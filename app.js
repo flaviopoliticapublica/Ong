@@ -27,6 +27,7 @@ function navUser() {
   const n = $("#nav");
   n.querySelectorAll(".dyn").forEach((e) => e.remove());
   const add = (h, r, t) => n.insertAdjacentHTML("beforeend", `<a class="dyn" href="${h}" data-r="${r}">${t}</a>`);
+  add("#cadastrar", "cadastrar", "＋ Novo projeto");
   if (!ME) add("#conta", "conta", "Entrar / Criar conta");
   else {
     if (ME.tipo === "ong") add("#meus", "meus", "Meus projetos");
@@ -262,8 +263,9 @@ function vPainel(root) {
 
 // ---------- Conta (login / cadastro) ----------
 function vConta(root) {
-  if (ME) { location.hash = ME.tipo === "ong" ? "#meus" : "#explorar"; return; }
+  if (ME) { avisoLogin = false; location.hash = ME.tipo === "ong" ? "#meus" : "#explorar"; return; }
   root.innerHTML = `<h1>Entrar ou criar conta</h1>
+  ${avisoLogin ? `<p class="panel" role="status">Para publicar um projeto, entre ou crie uma conta de <strong>ONG</strong>.</p>` : ""}
   <p class="lead">ONGs publicam e gerenciam seus projetos e recebem interessados. Apoiadores e voluntários têm conta para agilizar o contato.</p>
   <div class="row">
     <form class="panel" id="fl" style="display:grid;gap:10px;align-content:start"><h2 style="margin:0">Entrar</h2>
@@ -310,42 +312,71 @@ async function vMeus(root) {
   }));
 }
 
-// ---------- Cadastrar / editar projeto ----------
+// ---------- Novo projeto / editar projeto ----------
+let avisoLogin = false;
 function vCadastrar(root) {
-  if (!ME || ME.tipo !== "ong") { location.hash = "#conta"; return; }
+  if (!ME || ME.tipo !== "ong") { avisoLogin = true; location.hash = "#conta"; return; }
   const editId = location.hash.split("?")[1];
   const ed = editId && ALL_PROJ().find((p) => p.id === editId && p.ong === ME.ong_id);
-  const v = (k, d = "") => esc(ed ? ed[k] : d);
-  const ordem = ed ? [...ed.ods] : [];
+  const rasc = !ed ? store.get("rascunho_" + ME.id, null) : null; // rascunho local, só para novos projetos
+  const base = ed || rasc || {};
+  const v = (k, d = "") => esc(base[k] ?? d);
+  const ordem = [...(base.ods || [])];
+  const ong = ongOf(ME.ong_id);
   root.innerHTML = `<h1>${ed ? "Editar projeto" : "Novo projeto"}</h1>
-  <p class="lead">Vincule o projeto aos ODS e eixos. Ele passa a aparecer nas buscas e conexões.</p>
-  <form class="panel" id="fc" style="display:grid;gap:12px">
-    <div class="row">
+  <p class="lead">Publicando como <strong>${esc(ong?.nome || "sua ONG")}</strong>. Vincule o projeto aos ODS e eixos para que ele apareça nas buscas e nas conexões. ${ed ? "" : "O que você digitar é guardado como rascunho neste navegador."}</p>
+  <div class="split">
+  <form id="fc" style="display:grid;gap:16px;min-width:0">
+    <section class="panel" style="margin:0;display:grid;gap:12px"><h2 style="margin:0">1. Sobre o projeto</h2>
       <div><label for="c2">Nome do projeto *</label><input id="c2" required maxlength="100" value="${v("nome")}"></div>
-      <div><label for="c3">Cidade *</label><input id="c3" required maxlength="60" value="${v("cidade")}"></div>
-      <div><label for="c4">UF *</label><input id="c4" required maxlength="2" pattern="[A-Za-z]{2}" style="text-transform:uppercase" value="${v("uf")}"></div>
-      <div><label for="c5">Público atendido</label><input id="c5" maxlength="100" value="${ed && ed.publico !== "—" ? v("publico") : ""}"></div>
-      <div><label for="c6">Nº de beneficiários</label><input id="c6" type="number" min="0" value="${v("beneficiarios")}"></div>
-      <div><label for="c7">Situação</label><select id="c7">${Object.entries(STATUS).map(([k, t]) => `<option value="${k}" ${ed?.status === k ? "selected" : ""}>${t}</option>`).join("")}</select></div>
-      <div><label for="c8">Indicador de resultado</label><input id="c8" maxlength="100" value="${ed && ed.indicador !== "—" ? v("indicador") : ""}"></div>
-    </div>
-    <div><label for="c9">Resumo do projeto *</label><textarea id="c9" required maxlength="400">${v("resumo")}</textarea></div>
-    <fieldset style="border:0;padding:0;margin:0"><legend><label>Eixos temáticos * (ao menos um)</label></legend><div class="odspick">${EIXOS.map((e) => `<label><input type="checkbox" name="e" value="${e.id}" ${ed?.eixos.includes(e.id) ? "checked" : ""}>${e.icone} ${esc(e.nome)}</label>`).join("")}</div></fieldset>
-    <fieldset style="border:0;padding:0;margin:0"><legend><label>ODS * (o primeiro marcado será o principal)</label></legend><div class="odspick">${ODS.map((o) => `<label><input type="checkbox" name="o" value="${o.n}" ${ordem.includes(o.n) ? "checked" : ""}>${odsBadge(o.n, true)} ${esc(o.nome)}</label>`).join("")}</div></fieldset>
-    <fieldset style="border:0;padding:0;margin:0"><legend><label>O que o projeto precisa</label></legend><div class="odspick">${NECESSIDADES.map((n) => `<label><input type="checkbox" name="n" value="${n.id}" ${ed?.necessidades.includes(n.id) ? "checked" : ""}>${esc(n.nome)}</label>`).join("")}</div></fieldset>
-    <p id="cerr" class="meta" role="alert" style="color:var(--warn)"></p>
-    <div><button>${ed ? "Salvar alterações" : "Publicar projeto"}</button></div>
-  </form>`;
+      <div><label for="c9">Resumo * <span class="meta" id="cc"></span></label><textarea id="c9" required maxlength="400" placeholder="O que o projeto faz, para quem e com que resultado esperado.">${v("resumo")}</textarea></div>
+      <div class="row">
+        <div><label for="c3">Cidade *</label><input id="c3" required maxlength="60" value="${v("cidade", ong?.cidade || "")}"></div>
+        <div><label for="c4">UF *</label><input id="c4" required maxlength="2" pattern="[A-Za-z]{2}" style="text-transform:uppercase" value="${v("uf", ong?.uf || "")}"></div>
+        <div><label for="c5">Público atendido</label><input id="c5" maxlength="100" value="${base.publico && base.publico !== "—" ? v("publico") : ""}"></div>
+        <div><label for="c6">Nº de beneficiários</label><input id="c6" type="number" min="0" value="${v("beneficiarios")}"></div>
+        <div><label for="c7">Situação</label><select id="c7">${Object.entries(STATUS).map(([k, t]) => `<option value="${k}" ${base.status === k ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+        <div><label for="c8">Indicador de resultado</label><input id="c8" maxlength="100" placeholder="ex.: famílias atendidas" value="${base.indicador && base.indicador !== "—" ? v("indicador") : ""}"></div>
+      </div></section>
+    <section class="panel" style="margin:0;display:grid;gap:12px"><h2 style="margin:0">2. Eixos e ODS</h2>
+      <fieldset style="border:0;padding:0;margin:0"><legend><label>Eixos temáticos * (ao menos um)</label></legend><div class="odspick">${EIXOS.map((e) => `<label><input type="checkbox" name="e" value="${e.id}" ${base.eixos?.includes(e.id) ? "checked" : ""}>${e.icone} ${esc(e.nome)}</label>`).join("")}</div></fieldset>
+      <fieldset style="border:0;padding:0;margin:0"><legend><label>ODS com os quais o projeto contribui * (ao menos um)</label></legend><div class="odspick">${ODS.map((o) => `<label><input type="checkbox" name="o" value="${o.n}" ${ordem.includes(o.n) ? "checked" : ""}>${odsBadge(o.n, true)} ${esc(o.nome)}</label>`).join("")}</div></fieldset>
+      <div style="max-width:360px"><label for="cp">ODS principal</label><select id="cp"></select></div></section>
+    <section class="panel" style="margin:0;display:grid;gap:12px"><h2 style="margin:0">3. O que o projeto precisa</h2>
+      <div class="odspick">${NECESSIDADES.map((n) => `<label><input type="checkbox" name="n" value="${n.id}" ${base.necessidades?.includes(n.id) ? "checked" : ""}>${esc(n.nome)}</label>`).join("")}</div></section>
+    <p id="cerr" class="meta" role="alert" style="color:var(--warn);margin:0"></p>
+    <div class="act" style="display:flex;gap:8px;flex-wrap:wrap"><button>${ed ? "Salvar alterações" : "Publicar projeto"}</button><a class="btn sec" href="#meus">Cancelar</a>${ed ? "" : `<button type="button" class="sec" id="cdel">Descartar rascunho</button>`}</div>
+  </form>
+  <aside style="min-width:0"><h2 style="margin-top:0">Como vai aparecer</h2><div id="pv"></div></aside></div>`;
+  const g = (n) => [...root.querySelectorAll(`[name=${n}]:checked`)].map((i) => i.value);
+  const draft = () => {
+    const principal = +$("#cp").value || ordem[0];
+    const ods = principal ? [principal, ...ordem.filter((n) => n !== principal)] : [];
+    return { nome: $("#c2").value, cidade: $("#c3").value, uf: $("#c4").value, publico: $("#c5").value, beneficiarios: $("#c6").value, status: $("#c7").value, indicador: $("#c8").value, resumo: $("#c9").value, eixos: g("e"), ods, necessidades: g("n") };
+  };
+  const refresh = () => {
+    const cur = $("#cp").value;
+    $("#cp").innerHTML = ordem.length ? ordem.map((n) => `<option value="${n}" ${String(n) === cur || (!cur && n === ordem[0]) ? "selected" : ""}>ODS ${n} — ${esc(odsOf(n).nome)}</option>`).join("") : `<option value="">Marque ao menos um ODS</option>`;
+    $("#cc").textContent = `(${$("#c9").value.length}/400)`;
+    const d = draft();
+    $("#pv").innerHTML = card({ id: "pv", ong: ME.ong_id, ...d, nome: d.nome || "Nome do projeto", resumo: d.resumo || "O resumo aparece aqui.", cidade: d.cidade || "Cidade", uf: d.uf.toUpperCase() || "UF", necessidades: d.necessidades }).replace(/<div class="act">[^]*?<\/div>\s*<\/article>/, "</article>");
+    if (!ed) store.set("rascunho_" + ME.id, d);
+  };
   root.querySelectorAll("[name=o]").forEach((i) => i.addEventListener("change", () => {
     const n = +i.value, k = ordem.indexOf(n);
     if (i.checked && k < 0) ordem.push(n); else if (!i.checked && k >= 0) ordem.splice(k, 1);
   }));
+  $("#fc").addEventListener("input", refresh); $("#fc").addEventListener("change", refresh);
+  if (base.ods?.length) { $("#cp").innerHTML = `<option value="${base.ods[0]}"></option>`; $("#cp").value = base.ods[0]; }
+  refresh();
+  const del = $("#cdel"); if (del) del.onclick = () => { store.set("rascunho_" + ME.id, null); vCadastrar(root); };
   $("#fc").onsubmit = async (e) => {
     e.preventDefault();
-    const g = (n) => [...root.querySelectorAll(`[name=${n}]:checked`)].map((i) => i.value);
-    const body = { nome: $("#c2").value, cidade: $("#c3").value, uf: $("#c4").value, publico: $("#c5").value, beneficiarios: $("#c6").value, status: $("#c7").value, indicador: $("#c8").value, resumo: $("#c9").value, eixos: g("e"), ods: [...ordem], necessidades: g("n") };
+    const body = draft();
+    if (!body.eixos.length || !body.ods.length) { $("#cerr").textContent = "Escolha ao menos um eixo e um ODS."; return; }
     try {
       await api(ed ? "PUT" : "POST", "/api/projetos" + (ed ? "/" + ed.id : ""), body);
+      if (!ed) store.set("rascunho_" + ME.id, null);
       await recarregar(); location.hash = "#meus";
     } catch (er) { $("#cerr").textContent = er.message; }
   };
